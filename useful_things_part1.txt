@@ -1,0 +1,117 @@
+
+
+
+# Converting PED to VCF
+# # if there is no ped file, use GenomeStudio with PLINK Report Plug in to generate ped file
+# https://knowledge.illumina.com/microarray/general/microarray-general-reference_material-list/000003267
+# use PLINK 1.9
+# need .ped file and .map file
+plink --file files --recode vcf --out files_converted
+# this does not create normal VCF. It creates PLINK vcf which messes up the chrom and pos columns, they are zeroed; they are combined in the id column instead.
+# therefore running downstream stuff wouldnt work.
+
+# now trying to figure out how to produce a normal vcf...
+
+# trying with idat2gtc/gtc2vcf - https://github.com/freeseek/gtc2vcf?tab=readme-ov-file#installation
+# how to install plugins for bcftools
+module load bcftools (version > 1.20)
+mkdir -p bcftools-plugins 
+wget pre-compiled binaries from https://software.broadinstitute.org/software/gtc2vcf/ (make sure version downloaded is the same as that loaded)
+# from second time around
+export BCFTOOLS_PLUGINS=/exports/csce/eddie/biology/groups/MRC_DPFS_Data/bcftools-plugins/plugins #tell bcftools where to find plugin 
+bcftools plugin -l
+
+# first idat2gtc
+bcftools +idat2gtc --bpm $file/Manifest_ClusterFile/Manifest_ClusterFile/GSA-MD-48v4-0_20098041_A2.bpm --egt $file/Manifest_ClusterFile/Manifest_ClusterFile/Clusterfile_041124.egt --idats /idat/ 
+
+# and then gtc -> vcf (there was an option to use idats here but it was weird)
+# ref genome from https://ftp.ensembl.org/pub/release-115/fasta/homo_sapiens/dna/
+# make sure to check which genome build was used to create bam file (check cellranger) and also which was used for snp array. 
+# for snp array check the bpm file 
+$file="file/file/file"
+bcftools +gtc2vcf --bpm $file/Manifest_ClusterFile/Manifest_ClusterFile/GSA-MD-48v4-0_20098041_A2.bpm --egt $file/Manifest_ClusterFile/Manifest_ClusterFile/Clusterfile_041124.egt --gtcs gtcs/ --fasta-ref Homo_sapiens.GRCh38.dna.primary_assembly.fa -o GTC2VCF_file.vcf
+# check if this vcf makes sense
+
+# running cellsnp-lite - but first we need to do some pre-processing
+
+
+# check first few lines
+head -n 40 files_converted.vcf
+# check spec lines
+sed -n '100,150p' GTC2VCF_file.vcf
+# checking which format the genotype measures are
+grep "##FORMAT" GTC2VCF_file.vcf
+
+# For Vireo you should only have the donors that are in this pool in the vcf file
+# https://demultiplexing-doublet-detecting-docs.readthedocs.io/en/latest/Vireo.html
+
+# BCFtools
+# view: subset, filter and convert VCF and BCF files
+# this requires compression with bqzip
+bgzip -c $VCF > $VCF.gz
+# if there is an error at the end of the last step to do with sorting then the vcf file needs to be sorted
+bcftools sort GTC2VCF_file.vcf.gz -Oz -o GTC2VCF_file_sorted.vcf.gz
+# to index this file
+tabix -p vcf $VCF.gz
+
+# now we can proceed
+bcftools view GTC2VCF_file.vcf \
+	--regions-file cellsnplite_out_new/cellSNP.base.vcf.gz \
+	--samples "^209618020156_R16C01,209618020156_R03C02,209618020156_R15C03,209618020156_R16C03" \
+	--output-type v \
+	-o donor_subset.vcf
+	
+bcftools view GTC2VCF_file_sorted.vcf.gz \
+--regions-file cellsnplite_out_new/cellSNP.base.vcf.gz \
+--samples "209618020156_R01C01,\
+209618020156_R03C01,\
+209618020156_R05C01,\
+209618020156_R07C01,\
+209618020156_R09C01,\
+209618020156_R11C01,\
+209618020156_R13C01,\
+209618020156_R15C01,\
+209618020156_R02C01,\
+209618020156_R04C01,\
+209618020156_R06C01,\
+209618020156_R08C01,\
+209618020156_R10C01,\
+209618020156_R12C01,\
+209618020156_R14C01,\
+209618020156_R01C02" \
+--output-type v \
+-o donor_subset_new.vcf
+	
+	
+# extract sample id
+bcftools query -l input.vcf
+# to look at summary
+bcftools stats donor_subset.vcf
+
+# view zipped file
+zcat file.gz | more
+
+
+209618020156_R01C01
+209618020156_R03C01
+209618020156_R05C01
+209618020156_R07C01
+209618020156_R09C01
+209618020156_R11C01
+209618020156_R13C01
+209618020156_R15C01
+209618020156_R02C01
+209618020156_R04C01
+209618020156_R06C01
+209618020156_R08C01
+209618020156_R10C01
+209618020156_R12C01
+209618020156_R14C01
+209618020156_R16C01
+209618020156_R01C02
+209618020156_R03C02
+209618020156_R15C03
+209618020156_R16C03
+
+bam files from cell ranger need to be merged or cell snplite needs to be run for each pool separately. need to know which samples belong to pool1 and pool2 in the snp array data
+ 
